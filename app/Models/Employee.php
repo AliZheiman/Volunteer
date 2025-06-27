@@ -8,10 +8,11 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Notifications\Notifiable;
 
 class Employee extends Authenticatable
 {
-    use HasFactory, HasApiTokens;
+    use HasFactory, HasApiTokens ,Notifiable;
 
     protected $fillable = [
         'full_name',
@@ -32,13 +33,10 @@ class Employee extends Authenticatable
         'remember_token',
     ];
 
-    protected $casts = [
-        'date_accession' => 'date',
-    ];
 
     public function team(): BelongsTo
     {
-        return $this->belongsTo(VolunteerTeam::class);
+        return $this->belongsTo(VolunteerTeam::class,'team_id');
     }
 
     public function specialization(): BelongsTo

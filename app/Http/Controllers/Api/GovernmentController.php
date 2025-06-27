@@ -29,11 +29,11 @@ class GovernmentController extends Controller
         $teams = VolunteerTeam::where('status', 'accepted')
             ->get()
             ->map(function ($team) {
-                return [
+                 return [
                     'id' => $team->id,
                     'name' => $team->full_name,
-                    'team_name' => $team->team_name,
-                    'address' => $team->address,
+                    'team_name' => $team->businessInformation->team_name,
+                    'address' => $team->businessInformation->address,
                     'created_at' => $team->created_at,
                 ];
             });
@@ -104,74 +104,110 @@ class GovernmentController extends Controller
             'data' => [
                 'id' => $team->id,
                 'full_name' => $team->full_name,
-                'team_name' => $team->team_name,
-                'license_number' => $team->license_number,
+                'team_name' => $team->businessInformation->team_name,
+
+                'license_number' => $team->businessInformation->license_number,
                 'phone' => $team->phone,
-                'bank_account_number' => $team->bank_account_number,
+                'bank_account_number' => $team->businessInformation->bank_account_number,
                 'email' => $team->email,
-                'address' => $team->address,
+                'address' => $team->businessInformation->address,
                 'status' => $team->status,
-                'total_finance' => $team->campaigns->flatMap->financials->sum('amount'),
+                'total_finance' => optional($team->financial)->total_amount ?? 0,
+
                 'total_campaigns' => $team->campaigns->count(),
                 'total_employees' => $team->employees->count(),
+
+                'total_campaigns_rejected' => $team->campaigns->where('status','rejected')->count(),
+                'total_campaigns_done' => $team->campaigns->whereIn('status',['done','pending'])->count(),
                 'created_at' => $team->created_at,
             ]
         ]);
     }
 
-    public function getTeamFinance(VolunteerTeam $team)
+     public function getListTeamFinance($id)
     {
-        $payments = DonorPayment::whereHas('campaign', function ($query) use ($team) {
-                $query->where('team_id', $team->id);
-            })
-            ->with(['benefactor', 'campaign'])
+        $payments = DonorPayment::where('team_id', $id)
+            ->with(['benefactor', 'volunter'])  
             ->get()
             ->map(function ($payment) {
                 return [
-                    'name' => $payment->benefactor->name,
-                    'details' => $payment->campaign->campaign_name,
-                    'date' => $payment->created_at,
+                    'id' => $payment->id,
+                    'name' => optional($payment->benefactor)->name ?? optional($payment->volunter)->full_name ,
+                    'details' => $payment->type,
+                    'date' => $payment->payment_date,
                     'cost' => $payment->amount,
                 ];
             });
-
+    
+        if ($payments->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No payments found'
+            ]);
+        }
+    
         return response()->json([
             'success' => true,
             'data' => $payments
         ]);
     }
 
+
+
+    public function getTotalTeamFinance(VolunteerTeam $team)
+    {
+        $finances = Financial::where('team_id', $team->id)
+            ->get()
+            ->map(function ($finance) {
+                return [
+                    'id' => $finance->id,
+                    'total_amount' => $finance->total_amount,
+                    'payment' => $finance->payment,
+                    'date' => $finance->created_at,
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'data' => $finances
+        ]);
+    }
+
     public function getTeamCampaigns(VolunteerTeam $team)
     {
         $ongoingCampaigns = Campaign::where('team_id', $team->id)
-            ->where('status', 'ongoing')
+            ->where('status', 'pending')
             ->with('campaignType')
             ->get()
             ->map(function ($campaign) {
                 return [
                     'id' => $campaign->id,
-                    'name' => $campaign->name,
-                    'location' => $campaign->location,
-                    'date' => $campaign->start_date,
+                    'name' => $campaign->campaign_name,
+                    'location' => $campaign->address,
+                    'status'=> $campaign->status,
+                    'date' => $campaign->from,
                     'category' => $campaign->campaignType->name,
-                    'cost' => $campaign->financials->sum('amount'),
-                    'supplies' => $campaign->description,
+                    'cost' => $campaign->cost,
+                    // 'supplies' => $campaign->description,
                 ];
             });
 
         $completedCampaigns = Campaign::where('team_id', $team->id)
-            ->where('status', 'completed')
+            ->whereIn('status',['done','rejected'])
+            
             ->with('campaignType')
             ->get()
             ->map(function ($campaign) {
                 return [
                     'id' => $campaign->id,
-                    'name' => $campaign->name,
-                    'location' => $campaign->location,
-                    'date' => $campaign->start_date,
+                    'name' => $campaign->campaign_name,
+                    'location' => $campaign->address,
+                    'status'=> $campaign->status,
+                    'date' => $campaign->from,
                     'category' => $campaign->campaignType->name,
-                    'cost' => $campaign->financials->sum('amount'),
-                    'supplies' => $campaign->description,
+                    'cost' => $campaign->cost,
+                    
+                    // 'supplies' => $campaign->description,
                 ];
             });
 
@@ -187,16 +223,18 @@ class GovernmentController extends Controller
     public function getTeamEmployees(VolunteerTeam $team)
     {
         $employees = Employee::where('team_id', $team->id)
+            ->with('specialization')
             ->get()
             ->map(function ($employee) {
                 return [
                     'id' => $employee->id,
-                    'name' => $employee->name,
-                    'email' => $employee->email,
+                    'image' => $employee->image,
+                    'name' => $employee->full_name,
                     'phone' => $employee->phone,
+                    'email' => $employee->email,
+                    'address' => $employee->address,
                     'position' => $employee->position,
-                    'salary' => $employee->salary,
-                    'hire_date' => $employee->hire_date,
+                    'specialization' => $employee->specialization->name,
                 ];
             });
 
@@ -206,23 +244,26 @@ class GovernmentController extends Controller
         ]);
     }
 
-    public function approveCampaign(Campaign $campaign)
+    public function getAllVolunteers()
     {
-        $campaign->update(['status' => 'ongoing']);
+        $volunteers = Volunteer::with(['specialization'])
+            ->get()
+            ->map(function ($volunteer) {
+                return [
+                    'id' => $volunteer->id,
+                    'image' => $volunteer->image,
+                    'name' => $volunteer->full_name,
+                    'phone' => $volunteer->phone,
+                    'email' => $volunteer->email,
+                    'nationality' => $volunteer->nationality,
+                    'specialization' => $volunteer->specialization ? $volunteer->specialization->name : null,
+                    'total_points' => $volunteer->total_points,
+                ];
+            });
 
         return response()->json([
             'success' => true,
-            'message' => 'Campaign approved successfully'
-        ]);
-    }
-
-    public function rejectCampaign(Campaign $campaign)
-    {
-        $campaign->update(['status' => 'rejected']);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Campaign rejected successfully'
+            'data' => $volunteers
         ]);
     }
 } 

@@ -13,11 +13,13 @@ class GovernmentAuthController extends Controller
     public function register(Request $request)
     {
         $request->validate([
+            'name' => 'string',
             'email' => 'required|email|unique:governments',
             'password' => 'required|min:8',
         ]);
 
         $government = Government::create([
+            'name' => $request->name,
             'email' => $request->email,
             'password' => Hash::make($request->password),
         ]);
@@ -55,7 +57,10 @@ class GovernmentAuthController extends Controller
             'success' => true,
             'message' => 'Government user logged in successfully',
             'data' => [
-                'government' => $government,
+                  'government' => [
+                    ...$government->toArray(),
+                    'role' => 'Government'
+                ],
                 'token' => $token
             ]
         ]);

@@ -2,21 +2,24 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Models\Employee;
+use App\Models\Financial;
+use App\Models\Volunteer;
+use App\Models\Campaign;
+use Illuminate\Support\Str;
 use App\Http\Controllers\Controller;
 use App\Models\VolunteerTeam;
-use App\Models\Volunteer;
-use App\Models\Employee;
-use App\Models\BusinessInformation;
-use App\Models\Financial;
 use Illuminate\Http\Request;
+use App\Models\BusinessInformation;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Auth;
 
 class VolunteerTeamController extends Controller
 {
     public function index()
     {
-        $teams = VolunteerTeam::with(['businessInformation', 'employees', 'volunteers', 'financial'])->get();
+        $teams = VolunteerTeam::with(['businessInformation', 'employees', 'financial'])->get();
         return response()->json($teams);
     }
 
@@ -60,10 +63,31 @@ class VolunteerTeamController extends Controller
         return response()->json($team, 201);
     }
 
-    public function show(VolunteerTeam $team)
+    public function show($id)
     {
-        $team->load(['businessInformation', 'employees', 'volunteers', 'financial', 'campaigns', 'requests', 'donorPayments', 'contracts']);
-        return response()->json($team);
+        $team = VolunteerTeam::find($id);
+        
+        if (!$team) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Team not found'
+            ], 404);
+        }
+
+        $team->load([
+            'businessInformation',
+            'employees',
+            'financial',
+            'campaigns',
+            'requests',
+            'donorPayments',
+            'contracts'
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data' => $team
+        ]);
     }
 
     public function update(Request $request, VolunteerTeam $team)
@@ -111,78 +135,359 @@ class VolunteerTeamController extends Controller
         return response()->json(null, 204);
     }
 
-    public function addVolunteer(Request $request, VolunteerTeam $team)
+    public function getMyEmployees()
     {
+        $team = VolunteerTeam::find(Auth::id());
+
+        if (!$team) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Team not found'
+            ], 404);
+        }
+
+        $employees = $team->employees()->with('specialization')->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $employees
+        ]);
+    }
+
+  public function getTeamStatistics()
+    {
+        $team = VolunteerTeam::find(Auth::id());
+        
+        if (!$team) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Team not found'
+            ], 404);
+        }
+
+        $team->load(['financial', 'employees', 'contracts', 'campaigns']);
+
+        $totalCampaigns = $team->campaigns->count();
+        $completedCampaigns = $team->campaigns->where('status', 'done')->count();
+        $uncompletedCampaigns = $team->campaigns->where('status', '!=', 'done')->count();
+
+        $total = $completedCampaigns + $uncompletedCampaigns;
+
+        $completedPercentage = $total > 0 ? ($completedCampaigns / $total) * 100 : 0;
+        $uncompletedPercentage = $total > 0 ? ($uncompletedCampaigns / $total) * 100 : 0;
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'finance' => [
+                    'total_price' => $team->financial ? $team->financial->total_amount : 0,
+                    'payment' => $team->financial ? $team->financial->payment : 0
+                ],
+                'employees' => [
+                    'total_count' => $team->employees->count()
+                ],
+                'contracts' => [
+                    'total_count' => $team->contracts->count()
+                ],
+                'campaigns' => [
+                    'total_count' => $totalCampaigns,
+                    'completed_percentage' => round($completedPercentage, 2),
+                    'uncompleted_percentage' => round($uncompletedPercentage, 2),
+                    'completed_count' => $completedCampaigns,
+                    'uncompleted_count' => $uncompletedCampaigns
+                ]
+            ]
+        ]);
+    }
+
+
+    public function getTeamCampaigns()
+    {
+        $team = Auth::user(); 
+        if (!$team) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Team not found'
+            ], 404);
+        }
+
+        $completedCampaigns = Campaign::where('team_id', $team->id)
+            ->whereIn('status', ['done', 'rejected'])
+            ->with('campaignType')
+            ->get()
+            ->map(function ($campaign) {
+                return [
+                    'id' => $campaign->id,
+                    'name' => $campaign->campaign_name,
+                    'status'=> $campaign->status,
+                    'location' => $campaign->address,
+                    'date' => $campaign->from,
+                    'category' => optional($campaign->campaignType)->name,
+                    'cost' => $campaign->cost,
+                ];
+            });
+
+        $uncompletedCampaigns = Campaign::where('team_id', $team->id)
+            ->whereNotIn('status', ['done', 'rejected'])
+            ->with('campaignType')
+            ->get()
+            ->map(function ($campaign) {
+                return [
+                    'id' => $campaign->id,
+                    'name' => $campaign->campaign_name,
+                    'status'=> $campaign->status,
+                    'location' => $campaign->address,
+                    'date' => $campaign->from,
+                    'category' => optional($campaign->campaignType)->name,
+                    'cost' => $campaign->cost,
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'completed_campaigns' => $completedCampaigns,
+                'uncompleted_campaigns' => $uncompletedCampaigns
+            ]
+        ]);
+    }
+
+    public function getTeamContracts()
+    {
+        $team = VolunteerTeam::find(Auth::id());
+        
+        if (!$team) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Team not found'
+            ], 404);
+        }
+
+        $contracts = $team->contracts()->get()->map(function($contract) {
+            return [
+                'id' => $contract->id,
+                'company_name' => $contract->company_name,
+                'content' => $contract->content,
+                'contract_date' => $contract->contract_date,
+                'image' => $contract->image,
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $contracts
+        ]);
+    }
+
+    public function storeContract(Request $request)
+    {
+        $team = VolunteerTeam::find(Auth::id());
+        
+        if (!$team) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Team not found'
+            ], 404);
+        }
+
         $request->validate([
-            'volunteer_id' => 'required|exists:volunteers,id',
+            'company_name' => 'required|string|max:255',
+            'content' => 'required|string',
+            'contract_date' => 'required|date',
+            'image' => 'nullable|image|mimes:jpeg,png,jpg|max:2048',
         ]);
 
-        $volunteer = Volunteer::findOrFail($request->volunteer_id);
+        $contractData = $request->except('image');
 
-        // Check if volunteer is already in the team
-        if ($team->volunteers()->where('volunteer_id', $volunteer->id)->exists()) {
-            return response()->json(['message' => 'Volunteer is already a member of this team'], 422);
+        if ($request->hasFile('image')) {
+            $image = $request->file('image');
+            $imageName = uniqid() . '.' . $image->getClientOriginalExtension();
+            $image->move(public_path('uploads/contracts'), $imageName);
+            $contractData['image'] = 'uploads/contracts/' . $imageName;
         }
 
-        $team->volunteers()->attach($volunteer->id);
-        return response()->json(['message' => 'Volunteer added to team successfully']);
+        $contract = $team->contracts()->create($contractData);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Contract created successfully',
+            'data' => $contract
+        ], 201);
     }
 
-    public function removeVolunteer(VolunteerTeam $team, Volunteer $volunteer)
+    public function updateContract(Request $request, $contractId)
     {
-        if (!$team->volunteers()->where('volunteer_id', $volunteer->id)->exists()) {
-            return response()->json(['message' => 'Volunteer is not a member of this team'], 422);
+        $team = VolunteerTeam::find(Auth::id());
+        
+        if (!$team) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Team not found'
+            ], 404);
         }
 
-        $team->volunteers()->detach($volunteer->id);
-        return response()->json(['message' => 'Volunteer removed from team successfully']);
+        $contract = $team->contracts()->find($contractId);
+        if (!$contract) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Contract not found'
+            ], 404);
+        }
+        
+        $request->validate([
+            'company_name' => 'sometimes|string|max:255',
+            'content' => 'sometimes|string',
+            'contract_date' => 'sometimes|date',
+            // 'image' => 'nullable|image|mimes:jpeg,png,jpg|max:2048',
+        ]);
+
+        $contractData = $request->except('image');
+
+        if ($request->hasFile('image')) {
+            if ($contract->image && file_exists(public_path($contract->image))) {
+                unlink(public_path($contract->image));
+            }
+            
+            $image = $request->file('image');
+            $imageName = uniqid() . '.' . $image->getClientOriginalExtension();
+            $image->move(public_path('uploads/contracts'), $imageName);
+            $contractData['image'] = 'uploads/contracts/' . $imageName;
+        }
+
+        $contract->update($contractData);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Contract updated successfully',
+            'data' => $contract
+        ]);
     }
 
-    public function getVolunteers(VolunteerTeam $team)
+    public function deleteContract($contractId)
     {
-        $volunteers = $team->volunteers()->with('specialization')->get();
-        return response()->json($volunteers);
+        $team = VolunteerTeam::find(Auth::id());
+        
+        if (!$team) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Team not found'
+            ], 404);
+        }
+
+        $contract = $team->contracts()->find($contractId);
+        
+        if (!$contract) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Contract not found'
+            ], 404);
+        }
+
+        // Delete image if exists
+        if ($contract->image) {
+            Storage::disk('public')->delete($contract->image);
+        }
+
+        $contract->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Contract deleted successfully'
+        ]);
     }
 
-    public function getEmployees(VolunteerTeam $team)
+    public function showContract($contractId)
     {
-        $employees = $team->employees()->with('specialization')->get();
-        return response()->json($employees);
+        $team = VolunteerTeam::find(Auth::id());
+        
+        if (!$team) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Team not found'
+            ], 404);
+        }
+
+        $contract = $team->contracts()->find($contractId);
+        
+        if (!$contract) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Contract not found'
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $contract
+        ]);
     }
 
-    public function getCampaigns(VolunteerTeam $team)
+    public function storeEmployee(Request $request)
     {
-        $campaigns = $team->campaigns()->with(['specialization', 'campaignType', 'employee'])->get();
-        return response()->json($campaigns);
+        $request->validate([
+            'full_name' => 'required|string',
+            'email' => 'required|email|unique:employees',
+            'password' => 'required|min:6',
+            'national_number' => 'nullable|unique:employees',
+            'position' => 'required|in:مشرف,موظف مالي',
+            'phone' => 'required|string',
+            'address' => 'nullable|string',
+            'date_accession' => 'required|date_format:Y-m-d',
+            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:2048', 
+            'team_id' => 'exists:volunteer_teams,id',
+            'specialization_id' => 'nullable|exists:specializations,id',
+        ]);
+    
+        $imagePath = null;
+        if ($request->hasFile('image')) {
+            $imagePath = $request->file('image')->move(public_path('uploads/employee'), uniqid() . '.' . $request->file('image')->getClientOriginalExtension());
+            $imageRelativePath = 'uploads/employee/' . basename($imagePath);
+
+         
+        }
+    
+        $employee = Employee::create([
+            'full_name' => $request->full_name,
+            'email' => $request->email,
+            'password' => Hash::make($request->password),
+            'national_number' => $request->national_number,
+            'position' => $request->position,
+            'phone' => $request->phone,
+            'address' => $request->address,
+            'date_accession' => $request->date_accession,
+            'image' => $imageRelativePath, 
+            'team_id' => auth()->user()->id,
+            'specialization_id' => $request->specialization_id,
+        ]);
+    
+        return response()->json(['employee' => $employee], 201);
     }
 
-    public function getFinancial(VolunteerTeam $team)
+    public function LoginEmployee(Request $request)
     {
-        $financial = $team->financial;
-        return response()->json($financial);
+        $request->validate([
+            'email' => 'required|email',
+            'password' => 'required',
+        ]);
+    
+        $employee = Employee::where('email', $request->email)->first();
+    
+        if (!$employee || !Hash::check($request->password, $employee->password)) {
+            return response()->json([
+                'message' => 'The provided credentials are incorrect.',
+            ], 403);
+        }
+    
+
+
+        $token = $employee->createToken('auth_token')->plainTextToken;
+    
+        return response()->json([
+            'message' => 'employee logged in successfully',
+            'Employee' => $employee,
+            'token' => $token,
+        ]);
     }
 
-    public function getBusinessInformation(VolunteerTeam $team)
-    {
-        $businessInfo = $team->businessInformation;
-        return response()->json($businessInfo);
-    }
 
-    public function getDonorPayments(VolunteerTeam $team)
-    {
-        $payments = $team->donorPayments()->with(['benefactor', 'employee'])->get();
-        return response()->json($payments);
-    }
-
-    public function getContracts(VolunteerTeam $team)
-    {
-        $contracts = $team->contracts;
-        return response()->json($contracts);
-    }
-
-    public function getRequests(VolunteerTeam $team)
-    {
-        $requests = $team->requests()->with('volunteer')->get();
-        return response()->json($requests);
-    }
 } 

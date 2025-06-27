@@ -18,13 +18,6 @@ use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
-
-
-    
-    
-
-
-
     //Volunteer
     public function volunteerRegister(Request $request)
     {
@@ -153,11 +146,6 @@ class AuthController extends Controller
             'data' => $volunteer
         ]);
     }
-    
-
-
-
-
 
     /// teams
     public function teamRegister(Request $request)
@@ -226,8 +214,9 @@ class AuthController extends Controller
             DB::commit();
     
             return response()->json([
+                'success'=> true,
                 'message' => 'Team registered successfully',
-                'team' => $volunteerTeam,
+                'data' => $volunteerTeam,
                 'business_info' => $businessInfo,
             ], 201);
     
@@ -250,12 +239,13 @@ class AuthController extends Controller
     
         $team = VolunteerTeam::where('email', $request->email)->first();
     
+        
         if (!$team) {
             return response()->json([
-                'message' => 'The provided credentials are incorrect.',
-            ], 403);
+                'message' => 'Team with this email not found'
+            ], 404);
         }
-    
+        
         if ($team->status == "rejected" || $team->status ==  "pending") {
             return response()->json([
                 'message' => 'عذرًا، حسابك غير مفعل.',
@@ -271,14 +261,19 @@ class AuthController extends Controller
         $token = $team->createToken('auth_token')->plainTextToken;
     
         return response()->json([
-            'message' => 'Team logged in successfully',
-            'team' => $team,
-            'token' => $token,
+            'success' => true,
+            'message' => 'Team  logged in successfully',
+            'data' => [
+                  'team' => [
+                    ...$team->toArray(),
+                    'role' => 'Admin'
+                ],
+                'token' => $token
+            ]
         ]);
+   
     }
     
-    
-
     public function logout(Request $request)
     {
         $request->user()->currentAccessToken()->delete();
@@ -286,5 +281,18 @@ class AuthController extends Controller
         return response()->json([
             'message' => 'Successfully logged out',
         ]);
+    }
+
+    // تسجيل الدخول
+    public function loginemployee(Request $request)
+    {
+        $credentials = $request->only('email', 'password');
+
+        if (!Auth::guard('employee')->attempt($credentials)) {
+            return response()->json(['message' => 'بيانات الدخول غير صحيحة'], 401);
+        }
+
+        $employee = Auth::guard('employee')->user();
+        return response()->json(['employee' => $employee], 200);
     }
 } 

@@ -19,8 +19,14 @@ class DonorPayment extends Model
 
     public function volunter(): BelongsTo
     {
-        return $this->belongsTo(Volunteer::class);
+        return $this->belongsTo(Volunteer::class,'volunteer_id');
     }
+
+
+    protected $casts = [
+       
+        'amount' => 'decimal:2'
+    ];
 
     public function benefactor(): BelongsTo
     {
